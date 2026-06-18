@@ -1,0 +1,31 @@
+# Environment variables (jangan commit secrets)
+.env
+
+# Data volumes (akan dibuat otomatis oleh Docker)
+odoo-db-data/
+odoo-web-data/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Odoo
+*.log
+*.pid
+*.seed

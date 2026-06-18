@@ -1,0 +1,26 @@
+category,name,sell_price,cost_price,initial_stock,storable,type
+Bahan Baku Herbal,Jahe Merah,45000,28000,200,1,buy
+Bahan Baku Herbal,Kencur,38000,22000,150,1,buy
+Bahan Baku Herbal,Kunyit,32000,18000,180,1,buy
+Bahan Baku Herbal,Temulawak,35000,20000,120,1,buy
+Bahan Baku Herbal,Beras Putih,14000,10000,300,1,buy
+Bahan Baku Herbal,Gula Merah,22000,14000,200,1,buy
+Bahan Baku Herbal,Gula Pasir,16000,12000,250,1,buy
+Bahan Baku Herbal,Asam Jawa,28000,16000,80,1,buy
+Bahan Baku Herbal,Daun Sirih,25000,15000,60,1,buy
+Bahan Baku Herbal,Cabe Jawa,55000,35000,40,1,buy
+Bahan Baku Herbal,Puyang,42000,25000,50,1,buy
+Bahan Baku Herbal,Temu Ireng,30000,18000,70,1,buy
+Bahan Baku Herbal,Kayu Manis,48000,30000,45,1,buy
+Bahan Baku Herbal,Serai,18000,10000,90,1,buy
+Bahan Baku Herbal,Madu Murni,85000,55000,60,1,buy
+Kemasan,Botol Kaca 250ml,3500,2000,500,1,buy
+Kemasan,Label Sticker,500,200,1000,1,buy
+Kemasan,Karton Dus 12pcs,8000,5000,200,1,buy
+Kemasan,Tutup Botol,800,400,600,1,buy
+Jamu Jadi,Jamu Beras Kencur 250ml,18000,10000,80,1,manufacture
+Jamu Jadi,Jamu Kunyit Asam 250ml,18000,10000,75,1,manufacture
+Jamu Jadi,Jamu Temulawak 250ml,20000,11000,60,1,manufacture
+Jamu Jadi,Jamu Cabe Puyang 250ml,22000,12000,45,1,manufacture
+Jamu Jadi,Jamu Uyup-uyup 250ml,20000,11000,50,1,manufacture
+Jamu Jadi,Tolak Angin Sachet,5000,2500,300,1,manufacture
