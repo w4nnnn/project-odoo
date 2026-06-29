@@ -12,13 +12,11 @@ odoo/
 ├── config/
 │   └── odoo.conf             # Konfigurasi Odoo
 ├── addons/                   # Custom modules (taruh di sini)
-├── data/
-│   ├── products.csv          # Bahan baku, kemasan, produk jadi
-│   ├── contacts.csv          # Customer & supplier (dengan country)
-│   ├── orders.csv            # Sales & purchase orders
-│   ├── bom.csv               # Bill of Materials (resep jamu)
-│   └── generate_orders.py    # Generator untuk orders.csv
-└── seed_odoo.py              # Script seeding otomatis
+└── scripts/
+    └── seed/                 # Script seeding otomatis berbasis Python
+        ├── api.py            # Odoo API (koneksi & fungsi CRUD/Action)
+        ├── main.py           # Eksekutor rantai transaksi (PO, MO, SO) & master data
+        └── utils.py          # Helper function
 ```
 
 ## Quick Start
@@ -32,27 +30,21 @@ docker compose up -d
 
 > Build pertama kali ~2-3 menit (install wkhtmltopdf + imgkit).
 
-### 2. Buat Database
+### 2. Jalankan Seeding Script
 
-Buka `http://localhost:8069/web/database/manager`:
-- **Master Password**: `admin` (lihat `config/odoo.conf`)
-- **Database Name**: `odoo_prod` (sesuaikan di `seed_odoo.py`)
-- **Email / Password**: untuk login admin
-
-### 3. Jalankan Seeding Script
+Kini tidak perlu membuat database secara manual, jalankan perintah di bawah ini dan skrip otomatis mengecek serta membangun databasenya.
 
 ```bash
-python seed_odoo.py
+cd scripts/seed
+python3 main.py
 ```
 
 Script akan otomatis:
-1. Install modul: Sales, Inventory, Purchase, Manufacturing, Invoicing
-2. Buat kategori, produk (bahan baku + jamu jadi), dan kontak
-3. Isi stok bahan baku & kemasan
-4. Buat BOM (resep jamu)
-5. Buat Sales Orders dari data CSV
-6. Buat Manufacturing Orders (tanggal sebelum sales)
-7. Buat Purchase Orders (tanggal sebelum manufacturing)
+1. **Membuat Database**: Membuat database bernama `odoo` jika belum ada.
+2. **Install Modul**: Menginstal modul Sales, Inventory, Invoicing (Account), Purchase, Manufacturing, serta _addon custom_ Premium Home Menu (`custom_home_menu`).
+3. **Membuat Master Data**: Menginjeksi Pelanggan (terfokus di Jawa Timur), Vendor (Pemasok herbal di Jawa Timur), Kategori Produk, dan daftar produk (Jamu & Bahan Baku).
+4. **Membuat BOM (Resep Jamu)**: Mendaftarkan Bill of Materials untuk proses pabrikasi jamu.
+5. **Membuat Rantai Transaksi (Supply Chain)**: Membuat Purchase Order -> Material Receipt -> Manufacturing Order -> Sales Order -> Delivery Order yang tersebar ke masa lalu secara bertahap menggunakan _backdating_ acak selama beberapa bulan ke belakang.
 
 ### Supply Chain Terhubung
 
@@ -61,82 +53,37 @@ Script akan otomatis:
 (beli bahan baku)      (produksi jamu)        (jual ke customer)
 ────────────────       ────────────────       ────────────────
 Supplier → bahan       BOM → jamu jadi        Customer ← jamu
-Tanggal: awal          Tanggal: tengah        Tanggal: akhir
-
-Contoh (penjualan Januari 2025):
-  2024-12-01  PO beli kencur, gula merah, botol
-  2024-12-15  MO produksi Jamu Beras Kencur x50
-  2025-01-06  SO jual ke Apotek Kimia Farma x24
 ```
 
 ## Data Seeding
 
-### Produk
-
-| Kategori | Jumlah | Contoh |
-|---|---|---|
-| Bahan Baku Herbal | 15 | Jahe Merah, Kencur, Kunyit, Temulawak |
-| Kemasan | 4 | Botol Kaca 250ml, Label, Tutup Botol |
-| Jamu Jadi | 6 | Beras Kencur, Kunyit Asam, Temulawak, Cabe Puyang, Uyup-uyup, Tolak Angin |
-
-### BOM (Resep)
-
-```
-Jamu Beras Kencur  ← Kencur + Beras + Gula Merah + Botol + Label + Tutup
-Jamu Kunyit Asam   ← Kunyit + Asam Jawa + Gula Pasir + Botol + Label + Tutup
-Jamu Temulawak     ← Temulawak + Gula Merah + Madu + Botol + Label + Tutup
-Jamu Cabe Puyang   ← Cabe Jawa + Puyang + Gula Merah + Botol + Label + Tutup
-Jamu Uyup-uyup     ← Temu Ireng + Daun Sirih + Serai + Gula Merah + Botol + Label + Tutup
-Tolak Angin Sachet ← Jahe Merah + Kayu Manis + Madu + Gula Pasir
-```
-
 ### Kontak
 
-- **24 Customer**: Apotek (Kimia Farma, Century, K-24, Guardian, Watson, Roxy), Supermarket (Superindo, Transmart, Hypermart, Carrefour, Lotte Mart, Giant), Distributor, Toko herbal, Individu, Export (Singapore, Malaysia)
-- **8 Supplier**: Petani herbal, koperasi, distributor rempah, supplier gula/madu, supplier kemasan
+Data fokus untuk regional Jawa Timur:
+- **Pelanggan**: Warung Jamu Mbah Joyo (Sidoarjo), Apotek Sehat (Surabaya), Toko Herbal Nusantara (Malang), Minimarket Segar (Pasuruan), Klinik Berkah (Gresik).
+- **Vendor**: UD Tani Makmur (Rempah - Mojokerto), Pabrik Kemasan Botol (Sidoarjo), PT Gula Madu Sejahtera (Batu).
 
-### Transaksi
+### Produk & BOM (Resep)
 
-- **95 Sales Order lines** — Jan 2025 s/d Jun 2026
-- **31 Purchase Order lines** — terhubung dengan manufacturing
-- **Manufacturing Orders** — otomatis dari demand sales
-
-## Edit Data
-
-Semua data ada di file CSV folder `data/`. Edit pakai Excel/Google Sheets lalu jalankan ulang script.
-
-### Regenerate Orders
-
-```bash
-python data/generate_orders.py    # Generate orders.csv baru
-python seed_odoo.py               # Jalankan seeding
-```
+- **Bahan Baku**: Jahe Merah, Kunyit, Beras Putih, Kencur, Gula Merah, Botol Kaca 250ml, Label Sticker.
+- **Jamu Jadi**: 
+  - Jamu Jahe Merah 250ml
+  - Jamu Kunyit Asam 250ml
+  - Jamu Beras Kencur 250ml
 
 ## Konfigurasi
 
 ### Koneksi Script
 
-Edit di `seed_odoo.py`:
+Anda dapat mengontrol kredenisal _seeding_ skrip melalui Environment Variable (`export ODOO_USER="..."`) atau mengubah nilainya langsung di bagian atas `scripts/seed/main.py`:
 ```python
-ODOO_URL = "http://localhost:8069"
-ODOO_DB = "odoo_prod"
-ODOO_USER = "admin@odoo.com"
-ODOO_PASSWORD = "admin123"
+ODOO_URL = os.getenv("ODOO_URL", "http://localhost:8069")
+ODOO_DB = os.getenv("ODOO_DB", "odoo")
+ODOO_USER = os.getenv("ODOO_USER", "admin")
+ODOO_PASSWORD = os.getenv("ODOO_PASSWORD", "admin")
 ```
 
-### Environment Variables
-
-Edit `.env`:
-
-| Variable | Default | Description |
-|---|---|---|
-| `POSTGRES_USER` | `odoo` | Username PostgreSQL |
-| `POSTGRES_PASSWORD` | `odoo` | Password PostgreSQL |
-| `POSTGRES_DB` | `postgres` | Nama database PostgreSQL |
-| `ODOO_PORT` | `8069` | Port akses Odoo |
-| `ODOO_LONGPOLLING_PORT` | `8072` | Port long polling |
-
-### Ubah Master Password
+### Ubah Master Password Odoo Docker
 
 Edit `config/odoo.conf`:
 ```ini
@@ -147,31 +94,24 @@ admin_passwd = password_baru
 
 ### Reset semua data
 
+Jika Anda ingin membersihkan seluruh data secara total dan mengulang simulasi:
 ```bash
-docker compose down
-docker volume rm odoo_odoo-db-data odoo_odoo-web-data
+docker compose down -v
 docker compose up -d
 ```
+Lalu jalankan ulang `python3 scripts/seed/main.py`.
 
 ### Rebuild Docker image
 
 ```bash
-docker compose build
-docker compose up -d
-```
-
-### Module tidak muncul
-
-```bash
-docker compose restart web
-# Lalu di Odoo: Settings → Activate Developer Mode → Apps → Update Apps List
+docker compose up -d --build
 ```
 
 ### Cek logs
 
 ```bash
-docker compose logs -f web     # Log Odoo
-docker compose logs -f db      # Log PostgreSQL
+docker logs -f odoo-web     # Log Odoo
+docker logs -f odoo-db      # Log PostgreSQL
 ```
 
 ## Backup & Restore
