@@ -1,5 +1,5 @@
 import os
-import csv
+import random
 from datetime import datetime, timedelta
 from api import OdooAPI
 
@@ -10,7 +10,7 @@ ODOO_PASSWORD = os.getenv("ODOO_PASSWORD", "admin")
 
 def main():
     print("=" * 60)
-    print("  🏭 Odoo Seeding — Data Terhubung (Chain)")
+    print("  🏭 Odoo Seeding — Data Terhubung Massal (Chain)")
     print("=" * 60)
 
     api = OdooAPI(ODOO_URL, ODOO_DB, ODOO_USER, ODOO_PASSWORD)
@@ -18,213 +18,235 @@ def main():
     api.authenticate()
     api.install_required_modules()
 
+    # === 1. Membuat Master Data (Pelanggan, Vendor, Barang) ===
     print("\n1. Membuat Master Data (Pelanggan, Vendor, dan Barang)...")
     
-    # 1A. Mitra (Contacts)
-    customer_id = api.create('res.partner', {'name': 'Warung Jamu Mbah Joyo', 'is_company': False})
-    vendor_rempah_id = api.create('res.partner', {'name': 'UD Tani Makmur (Rempah)', 'is_company': True})
-    vendor_kemasan_id = api.create('res.partner', {'name': 'Pabrik Kemasan Botol', 'is_company': True})
-
-    # 1B. Bahan Baku (Raw Materials)
-    jahe_id = api.create('product.product', {'name': 'Jahe Merah', 'type': 'consu', 'is_storable': True, 'standard_price': 25000})
-    gula_id = api.create('product.product', {'name': 'Gula Merah', 'type': 'consu', 'is_storable': True, 'standard_price': 15000})
-    botol_id = api.create('product.product', {'name': 'Botol Kaca 250ml', 'type': 'consu', 'is_storable': True, 'standard_price': 2000})
-    
-    # 1C. Produk Jadi (Finished Good)
-    jamu_id = api.create('product.product', {'name': 'Jamu Jahe Merah 250ml', 'type': 'consu', 'is_storable': True, 'list_price': 18000})
-
-    print(f"✅ Master dibuat! Barang Jadi: Jamu Jahe Merah ({jamu_id})")
-
-    # Ambil template ID & UoM dari Jamu untuk referensi BoM
-    jamu_results = api.search_read('product.product', [('id', '=', jamu_id)], fields=['product_tmpl_id', 'uom_id'], limit=1)
-    if not jamu_results:
-        print("❌ Gagal mendapatkan data jamu.")
-        return
-    jamu_rec = jamu_results[0]
-    jamu_tmpl_id = jamu_rec['product_tmpl_id'][0] if isinstance(jamu_rec, dict) and 'product_tmpl_id' in jamu_rec else False
-    uom_id = jamu_rec['uom_id'][0] if isinstance(jamu_rec, dict) and 'uom_id' in jamu_rec else False
-
-    # ---------------------------------------------------------
-    print("\n2. Membuat Bill of Materials / Resep Jamu...")
-    bom_id = api.create('mrp.bom', {
-        'product_tmpl_id': jamu_tmpl_id,
-        'product_qty': 1.0,
-        'type': 'normal',
-    })
-    # Komponen Resep
-    api.create('mrp.bom.line', {'bom_id': bom_id, 'product_id': jahe_id, 'product_qty': 0.1})  # 100 gram
-    api.create('mrp.bom.line', {'bom_id': bom_id, 'product_id': gula_id, 'product_qty': 0.05}) # 50 gram
-    api.create('mrp.bom.line', {'bom_id': bom_id, 'product_id': botol_id, 'product_qty': 1.0}) # 1 botol
-    
-    print(f"✅ Resep/BoM ({bom_id}) untuk Jamu Jahe Merah 250ml berhasil dibuat.")
-
-    # === Penjadwalan Waktu (Backdating) ===
-    today = datetime.now()
-    po_date = (today - timedelta(days=10)).strftime('%Y-%m-%d 09:00:00')
-    receipt_date = (today - timedelta(days=8)).strftime('%Y-%m-%d 10:00:00')
-    mo_start_date = (today - timedelta(days=6)).strftime('%Y-%m-%d 08:00:00')
-    mo_done_date = (today - timedelta(days=5)).strftime('%Y-%m-%d 15:00:00')
-    so_date = (today - timedelta(days=4)).strftime('%Y-%m-%d 11:00:00')
-    delivery_date = (today - timedelta(days=2)).strftime('%Y-%m-%d 14:00:00')
-    mo2_start_date = (today - timedelta(days=1)).strftime('%Y-%m-%d 08:00:00')
-
-    print("\n3. Proses Pengadaan Bahan Baku (Purchase Order)...")
-    # PO ke Supplier Rempah
-    po1_id = api.create('purchase.order', {
-        'partner_id': vendor_rempah_id,
-        'date_order': po_date
-    })
-    api.create('purchase.order.line', {'order_id': po1_id, 'product_id': jahe_id, 'product_qty': 10, 'price_unit': 25000})
-    api.create('purchase.order.line', {'order_id': po1_id, 'product_id': gula_id, 'product_qty': 5, 'price_unit': 15000})
-    api.safe_action('purchase.order', po1_id, 'button_confirm')
-    api.write('purchase.order', [po1_id], {'date_approve': po_date})
-
-    # PO ke Supplier Botol
-    po2_id = api.create('purchase.order', {
-        'partner_id': vendor_kemasan_id,
-        'date_order': po_date
-    })
-    api.create('purchase.order.line', {'order_id': po2_id, 'product_id': botol_id, 'product_qty': 100, 'price_unit': 2000})
-    api.safe_action('purchase.order', po2_id, 'button_confirm')
-    api.write('purchase.order', [po2_id], {'date_approve': po_date})
-    
-    print(f"✅ Purchase Order untuk bahan baku telah dikonfirmasi (Tanggal: {po_date}).")
-
-    # ---------------------------------------------------------
-    print("\n4. Proses Pemindahan Barang Masuk (Penerimaan Bahan Baku)...")
-    def validate_receipt(po_id, done_date):
-        po_results = api.search_read('purchase.order', [('id', '=', po_id)], fields=['picking_ids'], limit=1)
-        if not po_results:
-            return
-        po_record = po_results[0]
-        if isinstance(po_record, dict):
-            for picking_id in po_record.get('picking_ids', []):
-                move_lines = api.search_read('stock.move.line', 
-                                     [('picking_id', '=', picking_id)], 
-                                     fields=['id', 'quantity_product_uom'])
-                if isinstance(move_lines, list):
-                    for ml in move_lines:
-                        if isinstance(ml, dict):
-                            api.write('stock.move.line', [ml['id']], {'quantity': ml['quantity_product_uom'], 'date': done_date})
-                
-                # Memastikan tanggal masuk tercatat sesuai di stock.move
-                moves = api.search_read('stock.move', [('picking_id', '=', picking_id)], fields=['id'])
-                if isinstance(moves, list):
-                    for mv in moves:
-                        if isinstance(mv, dict):
-                            api.write('stock.move', [mv['id']], {'date': done_date})
-
-                api.safe_action('stock.picking', picking_id, 'button_validate')
-                api.write('stock.picking', [picking_id], {'date_done': done_date})
-            
-    validate_receipt(po1_id, receipt_date)
-    validate_receipt(po2_id, receipt_date)
-    print(f"✅ Penerimaan barang divalidasi. Bahan baku masuk gudang (Tanggal: {receipt_date}).")
-
-    # ---------------------------------------------------------
-    print("\n5. Proses Produksi Jamu (Manufacturing Order)...")
-    
-    # MO 1: Selesai (Done)
-    mo_id = api.create('mrp.production', {
-        'product_id': jamu_id,
-        'product_qty': 50,
-        'product_uom_id': uom_id,
-        'bom_id': bom_id,
-        'date_start': mo_start_date,
-    })
-    # Konfirmasi Produksi
-    api.action('mrp.production', mo_id, 'action_confirm')
-    api.action('mrp.production', mo_id, 'action_assign')
-    api.write('mrp.production', [mo_id], {'qty_producing': 50})
-    
-    # Consumed materials backdate
-    mo_results = api.search_read('mrp.production', [('id', '=', mo_id)], fields=['move_raw_ids'], limit=1)
-    if mo_results:
-        mo_record = mo_results[0]
-        if isinstance(mo_record, dict) and 'move_raw_ids' in mo_record:
-            for move_id in mo_record.get('move_raw_ids', []):
-                move_results = api.search_read('stock.move', [('id', '=', move_id)], fields=['product_uom_qty'], limit=1)
-                if move_results:
-                    move = move_results[0]
-                    if isinstance(move, dict):
-                        api.write('stock.move', [move_id], {
-                            'quantity': move.get('product_uom_qty', 0), 
-                            'picked': True,
-                            'date': mo_done_date
-                        })
-
-    try:
-        api.action('mrp.production', mo_id, 'button_mark_done')
-        api.write('mrp.production', [mo_id], {'date_finished': mo_done_date})
+    # Pelanggan (Fokus Jawa Timur)
+    customers = []
+    for name, city in [
+        ('Warung Jamu Mbah Joyo', 'Sidoarjo'), 
+        ('Apotek Sehat', 'Surabaya'), 
+        ('Toko Herbal Nusantara', 'Malang'), 
+        ('Minimarket Segar', 'Pasuruan'), 
+        ('Klinik Berkah', 'Gresik')
+    ]:
+        customers.append(api.create('res.partner', {
+            'name': name, 'city': city, 'country_id': 100, # 100 is typically Indonesia in Odoo res.country
+            'is_company': True, 'customer_rank': 1
+        }))
         
-        # Odoo membuat stock.move untuk hasil produk. Backdate itu juga.
-        finished_moves = api.search_read('stock.move', [('production_id', '=', mo_id)], fields=['id'])
-        if isinstance(finished_moves, list):
-            for fm in finished_moves:
-                if isinstance(fm, dict):
-                    api.write('stock.move', [fm['id']], {'date': mo_done_date})
+    # Vendor (Fokus Jawa Timur)
+    vendors = {
+        'rempah': api.create('res.partner', {
+            'name': 'UD Tani Makmur (Rempah)', 'city': 'Mojokerto', 'country_id': 100, 
+            'is_company': True, 'supplier_rank': 1
+        }),
+        'kemasan': api.create('res.partner', {
+            'name': 'Pabrik Kemasan Botol', 'city': 'Sidoarjo', 'country_id': 100, 
+            'is_company': True, 'supplier_rank': 1
+        }),
+        'pemanis': api.create('res.partner', {
+            'name': 'PT Gula Madu Sejahtera', 'city': 'Batu', 'country_id': 100, 
+            'is_company': True, 'supplier_rank': 1
+        })
+    }
+
+    # Kategori Produk
+    categ_bahan = api.create('product.category', {'name': 'Bahan Baku Herbal'})
+    categ_kemasan = api.create('product.category', {'name': 'Kemasan'})
+    categ_jamu = api.create('product.category', {'name': 'Jamu Jadi'})
+
+    # Bahan Baku
+    raw_materials = {
+        'Jahe Merah': api.create('product.product', {'name': 'Jahe Merah', 'type': 'consu', 'categ_id': categ_bahan, 'is_storable': True, 'standard_price': 25000}),
+        'Kunyit': api.create('product.product', {'name': 'Kunyit', 'type': 'consu', 'categ_id': categ_bahan, 'is_storable': True, 'standard_price': 15000}),
+        'Beras': api.create('product.product', {'name': 'Beras Putih', 'type': 'consu', 'categ_id': categ_bahan, 'is_storable': True, 'standard_price': 12000}),
+        'Kencur': api.create('product.product', {'name': 'Kencur', 'type': 'consu', 'categ_id': categ_bahan, 'is_storable': True, 'standard_price': 20000}),
+        'Gula Merah': api.create('product.product', {'name': 'Gula Merah', 'type': 'consu', 'categ_id': categ_bahan, 'is_storable': True, 'standard_price': 18000}),
+        'Botol 250ml': api.create('product.product', {'name': 'Botol Kaca 250ml', 'type': 'consu', 'categ_id': categ_kemasan, 'is_storable': True, 'standard_price': 2000}),
+        'Label': api.create('product.product', {'name': 'Label Sticker', 'type': 'consu', 'categ_id': categ_kemasan, 'is_storable': True, 'standard_price': 500})
+    }
+
+    # Produk Jadi & BoM (Resep)
+    jamu_products = [
+        {'name': 'Jamu Jahe Merah 250ml', 'price': 18000, 'recipe': {'Jahe Merah': 0.1, 'Gula Merah': 0.05, 'Botol 250ml': 1, 'Label': 1}},
+        {'name': 'Jamu Kunyit Asam 250ml', 'price': 15000, 'recipe': {'Kunyit': 0.1, 'Gula Merah': 0.05, 'Botol 250ml': 1, 'Label': 1}},
+        {'name': 'Jamu Beras Kencur 250ml', 'price': 17000, 'recipe': {'Beras': 0.05, 'Kencur': 0.05, 'Gula Merah': 0.05, 'Botol 250ml': 1, 'Label': 1}},
+    ]
+
+    finished_goods = {}
+    print("\n2. Membuat Bill of Materials / Resep Jamu...")
+    for j in jamu_products:
+        pid = api.create('product.product', {'name': j['name'], 'type': 'consu', 'categ_id': categ_jamu, 'is_storable': True, 'list_price': j['price']})
+        finished_goods[j['name']] = pid
+        
+        prod_data = api.search_read('product.product', [('id', '=', pid)], fields=['product_tmpl_id'], limit=1)[0]
+        tmpl_id = prod_data['product_tmpl_id'][0] if isinstance(prod_data, dict) and 'product_tmpl_id' in prod_data else False
+        
+        if tmpl_id:
+            bom_id = api.create('mrp.bom', {'product_tmpl_id': tmpl_id, 'product_qty': 1.0, 'type': 'normal'})
+            for comp_name, qty in j['recipe'].items():
+                api.create('mrp.bom.line', {'bom_id': bom_id, 'product_id': raw_materials[comp_name], 'product_qty': qty})
+            print(f"   ✅ BoM {j['name']} dibuat.")
+
+    # Helper function untuk Receipt / Delivery
+    def validate_picking(picking_id, done_date):
+        # Update tanggal pada moves SEBELUM validasi
+        move_lines = api.search_read('stock.move.line', [('picking_id', '=', picking_id)], fields=['id', 'quantity_product_uom'])
+        if isinstance(move_lines, list):
+            for ml in move_lines:
+                if isinstance(ml, dict):
+                    api.write('stock.move.line', [ml['id']], {'quantity': ml['quantity_product_uom'], 'date': done_date})
+        
+        moves = api.search_read('stock.move', [('picking_id', '=', picking_id)], fields=['id', 'product_uom_qty'])
+        if isinstance(moves, list):
+            for mv in moves:
+                if isinstance(mv, dict):
+                    api.write('stock.move', [mv['id']], {'quantity': mv['product_uom_qty'], 'date': done_date})
                     
-        print(f"✅ Produksi 1 ({mo_id}) selesai! 50 botol Jamu (Mulai: {mo_start_date}, Selesai: {mo_done_date}).")
-    except Exception as e:
-        print(f"⚠️  Gagal validasi MO 1: {e}")
+        # Validasi
+        api.safe_action('stock.picking', picking_id, 'button_validate')
+        
+        # Set tanggal SELURUH dokumen setelah validasi agar tidak diremote Odoo menjadi 'sekarang'
+        api.write('stock.picking', [picking_id], {'date_done': done_date, 'scheduled_date': done_date})
+        if isinstance(moves, list):
+            for mv in moves:
+                if isinstance(mv, dict):
+                    api.write('stock.move', [mv['id']], {'date': done_date})
+        if isinstance(move_lines, list):
+            for ml in move_lines:
+                if isinstance(ml, dict):
+                    api.write('stock.move.line', [ml['id']], {'date': done_date})
 
-    # MO 2: Sedang Proses (In Progress / To Do)
-    mo2_id = api.create('mrp.production', {
-        'product_id': jamu_id,
-        'product_qty': 30,
-        'product_uom_id': uom_id,
-        'bom_id': bom_id,
-        'date_start': mo2_start_date,
-    })
-    api.action('mrp.production', mo2_id, 'action_confirm')
-    api.action('mrp.production', mo2_id, 'action_assign') 
-    print(f"✅ Produksi 2 ({mo2_id}) dibuat! 30 botol Jamu sedang diproses (Mulai: {mo2_start_date}).")
+    # === LOOP TRANSAKSI (30 Hari Terakhir) ===
+    print("\n⏳ Membangun Rantai Transaksi Massal (PO -> MO -> SO)...")
+    today = datetime.now()
+    
+    total_po, total_mo, total_so = 0, 0, 0
+    
+    # Kita buat simulasi 10 "Batch/Siklus" dalam 60 hari terakhir
+    for i in range(10):
+        # Tentukan titik waktu untuk siklus ini
+        days_ago = 60 - (i * 6)  # siklus per 6 hari
+        cycle_date = today - timedelta(days=days_ago)
+        
+        po_date = (cycle_date - timedelta(days=2)).strftime('%Y-%m-%d 09:00:00')
+        receipt_date = (cycle_date - timedelta(days=1)).strftime('%Y-%m-%d 10:00:00')
+        mo_start = cycle_date.strftime('%Y-%m-%d 08:00:00')
+        mo_end = (cycle_date + timedelta(hours=8)).strftime('%Y-%m-%d 16:00:00')
+        so_date = (cycle_date + timedelta(days=1)).strftime('%Y-%m-%d 11:00:00')
+        delivery_date = (cycle_date + timedelta(days=2)).strftime('%Y-%m-%d 14:00:00')
 
-    # ---------------------------------------------------------
-    print("\n6. Proses Jual Beli (Sales Order)...")
-    so_id = api.create('sale.order', {
-        'partner_id': customer_id,
-        'date_order': so_date
-    })
-    api.create('sale.order.line', {
-        'order_id': so_id,
-        'product_id': jamu_id,
-        'product_uom_qty': 20, 
-        'price_unit': 18000,
-    })
-    api.safe_action('sale.order', so_id, 'action_confirm')
-    print(f"✅ Sales Order ({so_id}) divalidasi (Tanggal: {so_date}).")
-
-    # ---------------------------------------------------------
-    print("\n7. Proses Pengiriman Barang ke Pelanggan (Delivery Order)...")
-    so_results = api.search_read('sale.order', [('id', '=', so_id)], fields=['picking_ids'], limit=1)
-    if not so_results:
-        return
-    so_record = so_results[0]
-    if isinstance(so_record, dict):
-        for picking_id in so_record.get('picking_ids', []):
-            api.safe_action('stock.picking', picking_id, 'action_assign') 
+        # --- A. Pengadaan (PO) ---
+        # Setiap siklus pesan random jumlah bahan baku
+        vendor_orders = {
+            vendors['rempah']: [raw_materials['Jahe Merah'], raw_materials['Kunyit'], raw_materials['Kencur']],
+            vendors['kemasan']: [raw_materials['Botol 250ml'], raw_materials['Label']],
+            vendors['pemanis']: [raw_materials['Gula Merah'], raw_materials['Beras']]
+        }
+        
+        for vendor_id, items in vendor_orders.items():
+            po_id = api.create('purchase.order', {'partner_id': vendor_id, 'date_order': po_date})
+            for prod_id in items:
+                qty = random.randint(100, 500) if prod_id not in [raw_materials['Botol 250ml'], raw_materials['Label']] else random.randint(1000, 3000)
+                price = 1000 # dummy default
+                api.create('purchase.order.line', {'order_id': po_id, 'product_id': prod_id, 'product_qty': qty, 'price_unit': price})
+            api.safe_action('purchase.order', po_id, 'button_confirm')
+            api.write('purchase.order', [po_id], {'date_approve': po_date})
             
-            move_lines = api.search_read('stock.move.line', 
-                                 [('picking_id', '=', picking_id)], 
-                                 fields=['id', 'quantity_product_uom'])
-            if isinstance(move_lines, list):
-                for ml in move_lines:
-                    if isinstance(ml, dict):
-                        api.write('stock.move.line', [ml['id']], {'quantity': ml['quantity_product_uom'], 'date': delivery_date})
-                
-            moves = api.search_read('stock.move', [('picking_id', '=', picking_id)], fields=['id', 'product_uom_qty'])
-            if isinstance(moves, list):
-                for mv in moves:
-                    if isinstance(mv, dict):
-                        api.write('stock.move', [mv['id']], {'quantity': mv['product_uom_qty'], 'date': delivery_date})
-                
-            api.safe_action('stock.picking', picking_id, 'button_validate')
-            api.write('stock.picking', [picking_id], {'date_done': delivery_date})
-            print(f"✅ Pengiriman ({picking_id}) selesai (Tanggal: {delivery_date}).")
+            po_results = api.search_read('purchase.order', [('id', '=', po_id)], fields=['picking_ids'], limit=1)
+            if po_results and isinstance(po_results, list):
+                po_res = po_results[0]
+                if isinstance(po_res, dict) and 'picking_ids' in po_res:
+                    for pick_id in po_res['picking_ids']:
+                        validate_picking(pick_id, receipt_date)
+            total_po += 1
+
+        # --- B. Produksi (MO) ---
+        # Produksi 1-3 jenis jamu tiap siklus
+        for jamu in random.sample(jamu_products, random.randint(1, 3)):
+            prod_qty = random.randint(50, 200)
+            jamu_pid = finished_goods[jamu['name']]
+            
+            prod_data_res = api.search_read('product.product', [('id', '=', jamu_pid)], fields=['uom_id'], limit=1)
+            if not prod_data_res or not isinstance(prod_data_res, list):
+                continue
+            prod_data = prod_data_res[0]
+            if isinstance(prod_data, dict):
+                uom_id = prod_data['uom_id'][0] if 'uom_id' in prod_data else False
+            else:
+                uom_id = False
+            
+            bom_id_res = api.search_read('mrp.bom', [('product_id', '=', False), ('product_tmpl_id.product_variant_ids', '=', jamu_pid)], fields=['id'], limit=1)
+            if not bom_id_res:
+                bom_id_res = api.search_read('mrp.bom', [('product_id', '=', jamu_pid)], fields=['id'], limit=1)
+            if bom_id_res and isinstance(bom_id_res, list):
+                b_res = bom_id_res[0]
+                b_id = b_res['id'] if isinstance(b_res, dict) and 'id' in b_res else False
+            else:
+                b_id = False
+
+            if not b_id: continue
+
+            mo_id = api.create('mrp.production', {
+                'product_id': jamu_pid, 'product_qty': prod_qty, 'product_uom_id': uom_id,
+                'bom_id': b_id, 'date_start': mo_start,
+            })
+            api.action('mrp.production', mo_id, 'action_confirm')
+            api.action('mrp.production', mo_id, 'action_assign')
+            api.write('mrp.production', [mo_id], {'qty_producing': prod_qty})
+            
+            mo_res = api.search_read('mrp.production', [('id', '=', mo_id)], fields=['move_raw_ids'], limit=1)
+            if mo_res and isinstance(mo_res, list) and isinstance(mo_res[0], dict) and 'move_raw_ids' in mo_res[0]:
+                for m_id in mo_res[0].get('move_raw_ids', []):
+                    m_res_line = api.search_read('stock.move', [('id', '=', m_id)], fields=['product_uom_qty'], limit=1)
+                    if m_res_line and isinstance(m_res_line, list) and isinstance(m_res_line[0], dict):
+                        api.write('stock.move', [m_id], {'quantity': m_res_line[0].get('product_uom_qty', 0), 'picked': True, 'date': mo_end})
+
+            try:
+                api.action('mrp.production', mo_id, 'button_mark_done')
+                api.write('mrp.production', [mo_id], {'date_finished': mo_end})
+                f_moves = api.search_read('stock.move', [('production_id', '=', mo_id)], fields=['id'])
+                if isinstance(f_moves, list):
+                    for fm in f_moves:
+                        if isinstance(fm, dict):
+                            api.write('stock.move', [fm['id']], {'date': mo_end})
+                total_mo += 1
+            except Exception:
+                pass # skip jika bahan baku kurang
+
+        # --- C. Penjualan (SO) ---
+        # Buat 2-5 pesanan dari pelanggan secara acak
+        for _ in range(random.randint(2, 5)):
+            cust_id = random.choice(customers)
+            # Buat SO dengan backdate
+            so_id = api.create('sale.order', {'partner_id': cust_id, 'date_order': so_date})
+            
+            for jamu in random.sample(jamu_products, random.randint(1, 2)):
+                api.create('sale.order.line', {
+                    'order_id': so_id, 'product_id': finished_goods[jamu['name']],
+                    'product_uom_qty': random.randint(10, 50), 'price_unit': jamu['price'],
+                })
+            
+            api.safe_action('sale.order', so_id, 'action_confirm')
+            # Set ulang date_order setelah confirm karena Odoo sering me-reset ke hari ini saat confirm
+            api.write('sale.order', [so_id], {'date_order': so_date})
+            
+            so_res = api.search_read('sale.order', [('id', '=', so_id)], fields=['picking_ids'], limit=1)
+            if so_res and isinstance(so_res, list) and isinstance(so_res[0], dict) and 'picking_ids' in so_res[0]:
+                for pick_id in so_res[0].get('picking_ids', []):
+                    api.safe_action('stock.picking', pick_id, 'action_assign')
+                    validate_picking(pick_id, delivery_date)
+            total_so += 1
+
+        print(f"   🔄 Siklus {i+1}/10 selesai (Tgl: {cycle_date.strftime('%Y-%m-%d')})")
 
     print("\n" + "=" * 60)
-    print("  ✅ SEEDING SELESAI!")
+    print("  ✅ SEEDING MASSAL SELESAI!")
+    print("=" * 60)
+    print(f"  🛒 Total PO (Bahan Baku): {total_po} Dokumen")
+    print(f"  🏭 Total MO (Produksi):   {total_mo} Dokumen")
+    print(f"  🚚 Total SO (Penjualan):  {total_so} Dokumen")
     print("=" * 60)
 
 if __name__ == "__main__":
