@@ -28,6 +28,12 @@ class OdooAPI:
                 print("⚠️ Tidak ada akses ke database manager (master password mungkin salah), menganggap database sudah ada.")
             else:
                 print(f"⚠️ Gagal mengecek/membuat database: {e}")
+        except xmlrpc.client.ProtocolError as e:
+            if e.errcode == 500:
+                print(f"⚠️ Error 500 dari Odoo. Memaksa pembuatan database langsung...")
+                self.db_rpc.create_database("admin", self.db, False, "en_US", self.password)
+            else:
+                print(f"⚠️ Gagal menghubungi server Odoo: {e}")
         except Exception as e:
             print(f"⚠️ Gagal menghubungi server Odoo: {e}")
 
@@ -58,6 +64,10 @@ class OdooAPI:
 
         print(f"\n   Meng-install {len(to_install)} modul...")
         self.safe_action("ir.module.module", to_install, "button_immediate_install")
+        print(f"   Menunggu Odoo menyelesaikan instalasi dan me-restart...")
+        
+        # Tunggu setidaknya 15 detik sebelum mulai polling
+        time.sleep(15)
 
         for attempt in range(60):
             time.sleep(5)
@@ -85,11 +95,24 @@ class OdooAPI:
         print("   Coba jalankan script lagi.")
 
     def authenticate(self):
-        self.uid = self.common.authenticate(self.db, self.username, self.password, {})
-        if not self.uid:
-            print("❌ Gagal login! Periksa ODOO_DB, ODOO_USER, dan ODOO_PASSWORD.")
-            sys.exit(1)
-        print(f"✅ Login berhasil (uid={self.uid})")
+        for attempt in range(12):
+            try:
+                self.uid = self.common.authenticate(self.db, self.username, self.password, {})
+                if self.uid:
+                    print(f"✅ Login berhasil (uid={self.uid})")
+                    return
+            except xmlrpc.client.ProtocolError as e:
+                if e.errcode == 500:
+                    print(f"   ⏳ Menunggu Odoo siap (Error 500)... {55 - attempt*5}s tersisa")
+                    time.sleep(5)
+                else:
+                    raise
+            except Exception as e:
+                print(f"   ⏳ Menunggu Odoo siap ({e})... {55 - attempt*5}s tersisa")
+                time.sleep(5)
+        
+        print("❌ Gagal login! Periksa ODOO_DB, ODOO_USER, ODOO_PASSWORD, atau status server.")
+        sys.exit(1)
 
     def _call(self, model, method, args=None, kwargs=None):
         return self.models.execute_kw(
