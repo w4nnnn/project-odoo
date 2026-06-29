@@ -1,5 +1,6 @@
 import os
 import csv
+from datetime import datetime, timedelta
 from api import OdooAPI
 
 ODOO_URL = os.getenv("ODOO_URL", "http://localhost:8069")
@@ -57,24 +58,41 @@ def main():
     
     print(f"✅ Resep/BoM ({bom_id}) untuk Jamu Jahe Merah 250ml berhasil dibuat.")
 
-    # ---------------------------------------------------------
+    # === Penjadwalan Waktu (Backdating) ===
+    today = datetime.now()
+    po_date = (today - timedelta(days=10)).strftime('%Y-%m-%d 09:00:00')
+    receipt_date = (today - timedelta(days=8)).strftime('%Y-%m-%d 10:00:00')
+    mo_start_date = (today - timedelta(days=6)).strftime('%Y-%m-%d 08:00:00')
+    mo_done_date = (today - timedelta(days=5)).strftime('%Y-%m-%d 15:00:00')
+    so_date = (today - timedelta(days=4)).strftime('%Y-%m-%d 11:00:00')
+    delivery_date = (today - timedelta(days=2)).strftime('%Y-%m-%d 14:00:00')
+    mo2_start_date = (today - timedelta(days=1)).strftime('%Y-%m-%d 08:00:00')
+
     print("\n3. Proses Pengadaan Bahan Baku (Purchase Order)...")
     # PO ke Supplier Rempah
-    po1_id = api.create('purchase.order', {'partner_id': vendor_rempah_id})
+    po1_id = api.create('purchase.order', {
+        'partner_id': vendor_rempah_id,
+        'date_order': po_date
+    })
     api.create('purchase.order.line', {'order_id': po1_id, 'product_id': jahe_id, 'product_qty': 10, 'price_unit': 25000})
     api.create('purchase.order.line', {'order_id': po1_id, 'product_id': gula_id, 'product_qty': 5, 'price_unit': 15000})
     api.safe_action('purchase.order', po1_id, 'button_confirm')
+    api.write('purchase.order', [po1_id], {'date_approve': po_date})
 
     # PO ke Supplier Botol
-    po2_id = api.create('purchase.order', {'partner_id': vendor_kemasan_id})
+    po2_id = api.create('purchase.order', {
+        'partner_id': vendor_kemasan_id,
+        'date_order': po_date
+    })
     api.create('purchase.order.line', {'order_id': po2_id, 'product_id': botol_id, 'product_qty': 100, 'price_unit': 2000})
     api.safe_action('purchase.order', po2_id, 'button_confirm')
+    api.write('purchase.order', [po2_id], {'date_approve': po_date})
     
-    print("✅ Purchase Order untuk bahan baku telah dikonfirmasi.")
+    print(f"✅ Purchase Order untuk bahan baku telah dikonfirmasi (Tanggal: {po_date}).")
 
     # ---------------------------------------------------------
     print("\n4. Proses Pemindahan Barang Masuk (Penerimaan Bahan Baku)...")
-    def validate_receipt(po_id):
+    def validate_receipt(po_id, done_date):
         po_results = api.search_read('purchase.order', [('id', '=', po_id)], fields=['picking_ids'], limit=1)
         if not po_results:
             return
@@ -87,12 +105,21 @@ def main():
                 if isinstance(move_lines, list):
                     for ml in move_lines:
                         if isinstance(ml, dict):
-                            api.write('stock.move.line', [ml['id']], {'quantity': ml['quantity_product_uom']})
+                            api.write('stock.move.line', [ml['id']], {'quantity': ml['quantity_product_uom'], 'date': done_date})
+                
+                # Memastikan tanggal masuk tercatat sesuai di stock.move
+                moves = api.search_read('stock.move', [('picking_id', '=', picking_id)], fields=['id'])
+                if isinstance(moves, list):
+                    for mv in moves:
+                        if isinstance(mv, dict):
+                            api.write('stock.move', [mv['id']], {'date': done_date})
+
                 api.safe_action('stock.picking', picking_id, 'button_validate')
+                api.write('stock.picking', [picking_id], {'date_done': done_date})
             
-    validate_receipt(po1_id)
-    validate_receipt(po2_id)
-    print("✅ Penerimaan barang divalidasi. Bahan baku telah masuk gudang (Stok bertambah).")
+    validate_receipt(po1_id, receipt_date)
+    validate_receipt(po2_id, receipt_date)
+    print(f"✅ Penerimaan barang divalidasi. Bahan baku masuk gudang (Tanggal: {receipt_date}).")
 
     # ---------------------------------------------------------
     print("\n5. Proses Produksi Jamu (Manufacturing Order)...")
@@ -100,20 +127,17 @@ def main():
     # MO 1: Selesai (Done)
     mo_id = api.create('mrp.production', {
         'product_id': jamu_id,
-        'product_qty': 50, # Kita memproduksi 50 Botol Jamu
+        'product_qty': 50,
         'product_uom_id': uom_id,
         'bom_id': bom_id,
+        'date_start': mo_start_date,
     })
     # Konfirmasi Produksi
     api.action('mrp.production', mo_id, 'action_confirm')
-    
-    # Reserve komponen bahan baku
     api.action('mrp.production', mo_id, 'action_assign')
-    
-    # Isi hasil produksi (Set Qty Producing)
     api.write('mrp.production', [mo_id], {'qty_producing': 50})
     
-    # Memastikan bahan baku tercatat sebagai dikonsumsi (consumed)
+    # Consumed materials backdate
     mo_results = api.search_read('mrp.production', [('id', '=', mo_id)], fields=['move_raw_ids'], limit=1)
     if mo_results:
         mo_record = mo_results[0]
@@ -123,37 +147,53 @@ def main():
                 if move_results:
                     move = move_results[0]
                     if isinstance(move, dict):
-                        api.write('stock.move', [move_id], {'quantity': move.get('product_uom_qty', 0), 'picked': True})
+                        api.write('stock.move', [move_id], {
+                            'quantity': move.get('product_uom_qty', 0), 
+                            'picked': True,
+                            'date': mo_done_date
+                        })
 
-    # Tandai Selesai (Mark as Done)
     try:
         api.action('mrp.production', mo_id, 'button_mark_done')
-        print(f"✅ Produksi 1 ({mo_id}) selesai! 50 botol Jamu (Status: Done).")
+        api.write('mrp.production', [mo_id], {'date_finished': mo_done_date})
+        
+        # Odoo membuat stock.move untuk hasil produk. Backdate itu juga.
+        finished_moves = api.search_read('stock.move', [('production_id', '=', mo_id)], fields=['id'])
+        if isinstance(finished_moves, list):
+            for fm in finished_moves:
+                if isinstance(fm, dict):
+                    api.write('stock.move', [fm['id']], {'date': mo_done_date})
+                    
+        print(f"✅ Produksi 1 ({mo_id}) selesai! 50 botol Jamu (Mulai: {mo_start_date}, Selesai: {mo_done_date}).")
     except Exception as e:
         print(f"⚠️  Gagal validasi MO 1: {e}")
 
     # MO 2: Sedang Proses (In Progress / To Do)
     mo2_id = api.create('mrp.production', {
         'product_id': jamu_id,
-        'product_qty': 30, # Rencana produksi 30 botol lagi
+        'product_qty': 30,
         'product_uom_id': uom_id,
         'bom_id': bom_id,
+        'date_start': mo2_start_date,
     })
     api.action('mrp.production', mo2_id, 'action_confirm')
-    api.action('mrp.production', mo2_id, 'action_assign') # Reserve bahan baku
-    print(f"✅ Produksi 2 ({mo2_id}) dibuat! 30 botol Jamu sedang diproses (Status: In Progress/To Do).")
+    api.action('mrp.production', mo2_id, 'action_assign') 
+    print(f"✅ Produksi 2 ({mo2_id}) dibuat! 30 botol Jamu sedang diproses (Mulai: {mo2_start_date}).")
 
     # ---------------------------------------------------------
     print("\n6. Proses Jual Beli (Sales Order)...")
-    so_id = api.create('sale.order', {'partner_id': customer_id})
+    so_id = api.create('sale.order', {
+        'partner_id': customer_id,
+        'date_order': so_date
+    })
     api.create('sale.order.line', {
         'order_id': so_id,
         'product_id': jamu_id,
-        'product_uom_qty': 20, # Jual 20 botol
+        'product_uom_qty': 20, 
         'price_unit': 18000,
     })
     api.safe_action('sale.order', so_id, 'action_confirm')
-    print(f"✅ Sales Order ({so_id}) divalidasi. Berhasil menjual 20 botol jamu.")
+    print(f"✅ Sales Order ({so_id}) divalidasi (Tanggal: {so_date}).")
 
     # ---------------------------------------------------------
     print("\n7. Proses Pengiriman Barang ke Pelanggan (Delivery Order)...")
@@ -163,7 +203,7 @@ def main():
     so_record = so_results[0]
     if isinstance(so_record, dict):
         for picking_id in so_record.get('picking_ids', []):
-            api.safe_action('stock.picking', picking_id, 'action_assign') # Reserve stok
+            api.safe_action('stock.picking', picking_id, 'action_assign') 
             
             move_lines = api.search_read('stock.move.line', 
                                  [('picking_id', '=', picking_id)], 
@@ -171,17 +211,17 @@ def main():
             if isinstance(move_lines, list):
                 for ml in move_lines:
                     if isinstance(ml, dict):
-                        api.write('stock.move.line', [ml['id']], {'quantity': ml['quantity_product_uom']})
+                        api.write('stock.move.line', [ml['id']], {'quantity': ml['quantity_product_uom'], 'date': delivery_date})
                 
-            # Also ensure stock.move has quantity set
             moves = api.search_read('stock.move', [('picking_id', '=', picking_id)], fields=['id', 'product_uom_qty'])
             if isinstance(moves, list):
                 for mv in moves:
                     if isinstance(mv, dict):
-                        api.write('stock.move', [mv['id']], {'quantity': mv['product_uom_qty']})
+                        api.write('stock.move', [mv['id']], {'quantity': mv['product_uom_qty'], 'date': delivery_date})
                 
             api.safe_action('stock.picking', picking_id, 'button_validate')
-            print(f"✅ Pengiriman ({picking_id}) selesai. Stok Jamu Jahe Merah berkurang 20 botol.")
+            api.write('stock.picking', [picking_id], {'date_done': delivery_date})
+            print(f"✅ Pengiriman ({picking_id}) selesai (Tanggal: {delivery_date}).")
 
     print("\n" + "=" * 60)
     print("  ✅ SEEDING SELESAI!")
