@@ -18,9 +18,18 @@ class OdooAPI:
             db_list = self.db_rpc.list()
             if self.db not in db_list:
                 print(f"🗄️ Database '{self.db}' tidak ditemukan. Membuat database dasar (ini memakan waktu)...")
-                # Default admin password untuk database manager di Odoo adalah 'admin'
                 self.db_rpc.create_database("admin", self.db, False, "en_US", self.password)
                 print(f"✅ Database '{self.db}' berhasil dibuat.")
+                
+                # Memastikan Odoo mendeteksi modul custom di folder addons
+                try:
+                    temp_uid = self.common.authenticate(self.db, self.username, self.password, {})
+                    if temp_uid:
+                        self.models.execute_kw(self.db, temp_uid, self.password, 'ir.module.module', 'update_list', [])
+                        print("✅ Daftar modul (update_list) berhasil diperbarui.")
+                except Exception as e:
+                    print(f"⚠️ Gagal mengupdate module list: {e}")
+                    
             else:
                 print(f"✅ Database '{self.db}' sudah ada.")
         except xmlrpc.client.Fault as e:
@@ -40,7 +49,7 @@ class OdooAPI:
     def install_required_modules(self):
         print("\n📦 Memeriksa modul yang diperlukan...")
         to_install = []
-        for name in ["sale_management", "stock", "account", "purchase", "mrp"]:
+        for name in ["sale_management", "stock", "account", "purchase", "mrp", "custom_home_menu"]:
             mods = self.search_read(
                 "ir.module.module",
                 [("name", "=", name)],
@@ -72,6 +81,15 @@ class OdooAPI:
         for attempt in range(60):
             time.sleep(5)
             try:
+                # Odoo butuh update module_list sebelum menginstall jika ada custom addons
+                if attempt == 0:
+                    try:
+                        temp_uid = self.common.authenticate(self.db, self.username, self.password, {})
+                        if temp_uid:
+                            self.models.execute_kw(self.db, temp_uid, self.password, 'ir.module.module', 'update_list', [])
+                    except Exception:
+                        pass
+                
                 # Menggunakan koneksi ulang untuk menghindari token stale saat Odoo restart
                 temp_uid = self.common.authenticate(self.db, self.username, self.password, {})
                 if not temp_uid:
