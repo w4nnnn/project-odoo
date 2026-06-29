@@ -21,6 +21,7 @@ services:
     build: .
     container_name: odoo-web
     restart: unless-stopped
+    command: odoo -i base -d odoo
     depends_on:
       db:
         condition: service_healthy
