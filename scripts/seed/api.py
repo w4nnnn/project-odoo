@@ -47,9 +47,16 @@ class OdooAPI:
             print(f"⚠️ Gagal menghubungi server Odoo: {e}")
 
     def install_required_modules(self):
-        print("\n📦 Memeriksa modul yang diperlukan...")
-        to_install = []
-        for name in ["sale_management", "stock", "account", "purchase", "mrp", "custom_home_menu"]:
+        print("\n📦 Memeriksa dan meng-install modul satu per satu...")
+        modules_to_check = ["sale_management", "stock", "account", "purchase", "mrp", "custom_home_menu"]
+        
+        for name in modules_to_check:
+            # Re-authenticate in case Odoo just restarted from a previous install
+            try:
+                self.authenticate()
+            except SystemExit:
+                return
+
             mods = self.search_read(
                 "ir.module.module",
                 [("name", "=", name)],
@@ -59,58 +66,63 @@ class OdooAPI:
             if not mods:
                 print(f"   ⚠️  Modul {name} tidak ditemukan, skip")
                 continue
+            
             mod = mods[0]
-            if isinstance(mod, dict):
-                if mod.get("state") == "installed":
-                    print(f"   ✅ {mod.get('shortdesc')} ({name})")
-                else:
-                    to_install.append(mod.get("id"))
-                    print(f"   ⏳ {mod.get('shortdesc')} ({name}) — akan di-install")
-
-        if not to_install:
-            print("   Semua modul sudah ter-install!")
-            return
-
-        print(f"\n   Meng-install {len(to_install)} modul...")
-        self.safe_action("ir.module.module", to_install, "button_immediate_install")
-        print(f"   Menunggu Odoo menyelesaikan instalasi dan me-restart...")
-        
-        # Tunggu setidaknya 15 detik sebelum mulai polling
-        time.sleep(15)
-
-        for attempt in range(60):
-            time.sleep(5)
-            try:
-                # Odoo butuh update module_list sebelum menginstall jika ada custom addons
-                if attempt == 0:
-                    try:
-                        temp_uid = self.common.authenticate(self.db, self.username, self.password, {})
-                        if temp_uid:
-                            self.models.execute_kw(self.db, temp_uid, self.password, 'ir.module.module', 'update_list', [])
-                    except Exception:
-                        pass
+            if not isinstance(mod, dict):
+                continue
                 
-                # Menggunakan koneksi ulang untuk menghindari token stale saat Odoo restart
-                temp_uid = self.common.authenticate(self.db, self.username, self.password, {})
-                if not temp_uid:
+            shortdesc = mod.get('shortdesc')
+            if mod.get("state") == "installed":
+                print(f"   ✅ {shortdesc} ({name}) sudah ter-install.")
+                continue
+
+            mod_id = mod.get("id")
+            print(f"\n   ⏳ Meng-install {shortdesc} ({name})...")
+            
+            self.safe_action("ir.module.module", [mod_id], "button_immediate_install")
+            print(f"   Menunggu Odoo menyelesaikan instalasi dan me-restart untuk {name}...")
+            
+            # Tunggu setidaknya 15 detik sebelum mulai polling
+            time.sleep(15)
+
+            installed = False
+            for attempt in range(60):
+                time.sleep(5)
+                try:
+                    # Update module list saat restart selesai jika perlu
+                    if attempt == 0:
+                        try:
+                            temp_uid = self.common.authenticate(self.db, self.username, self.password, {})
+                            if temp_uid:
+                                self.models.execute_kw(self.db, temp_uid, self.password, 'ir.module.module', 'update_list', [])
+                        except Exception:
+                            pass
+                            
+                    temp_uid = self.common.authenticate(self.db, self.username, self.password, {})
+                    if not temp_uid:
+                        continue
+                        
+                    check_mod = self.models.execute_kw(self.db, temp_uid, self.password, 'ir.module.module', 'search_read',
+                        [[("id", "=", mod_id)]],
+                        {'fields': ["state"], 'limit': 1})
+                        
+                    if check_mod and isinstance(check_mod, list) and len(check_mod) > 0:
+                        state = check_mod[0].get("state")
+                        if state == "installed":
+                            print(f"   ✅ {shortdesc} ({name}) berhasil ter-install!")
+                            installed = True
+                            break
+                        elif attempt % 6 == 0:
+                            print(f"   ⏳ Menunggu instalasi {name}... ({(attempt+1)*5}s) [Status: {state}]")
+                except Exception:
+                    # Server masih proses restart
                     continue
-                remaining = self.models.execute_kw(self.db, temp_uid, self.password, 'ir.module.module', 'search_read',
-                    [[("id", "in", to_install), ("state", "not in", ["installed"])]],
-                    {'fields': ["id", "state", "shortdesc"]})
-            except Exception:
-                # Jika masih gagal konek, artinya server masih proses restart
-                continue 
+                    
+            if not installed:
+                print(f"   ⚠️  Timeout! Modul {name} mungkin belum selesai di-install.")
+                print(f"   Akan mencoba lanjut ke modul berikutnya...")
 
-            if not remaining:
-                print("   ✅ Semua modul berhasil ter-install!")
-                return
-
-            if attempt % 6 == 0:
-                states = set(str(r.get("state")) for r in remaining if isinstance(r, dict) and "state" in r)
-                print(f"   ⏳ Menunggu instalasi... ({(attempt+1)*5}s) [{', '.join(states)}]")
-
-        print("   ⚠️  Timeout! Beberapa modul mungkin belum selesai di-install.")
-        print("   Coba jalankan script lagi.")
+        print("\n   ✅ Selesai memproses instalasi modul.")
 
     def authenticate(self):
         for attempt in range(12):
