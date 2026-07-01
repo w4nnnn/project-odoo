@@ -18,6 +18,47 @@ def main():
     api.authenticate()
     api.install_required_modules()
 
+    # === Mengatur Konfigurasi Mata Uang (IDR) ===
+    print("\n⚙️ Mengatur Mata Uang Perusahaan ke IDR...")
+    # Jika tidak mencari nama, Odoo sering memakai 'name' sebagai simbol, jadi kita cari berdasar nama
+    idr_currency = api.search_read('res.currency', [('name', '=', 'IDR')], fields=['id', 'active'], limit=1)
+    # Tapi karena IDR seringkali tidak aktif (active=False) secara default, kita harus matikan filter active
+    if not idr_currency:
+        # Search secara force mengabaikan rule active
+        idr_currency_search = api.models.execute_kw(api.db, api.uid, api.password, 'res.currency', 'search_read', 
+            [[('name', '=', 'IDR'), '|', ('active', '=', True), ('active', '=', False)]], 
+            {'fields': ['id', 'active'], 'limit': 1})
+        if idr_currency_search:
+            idr_currency = idr_currency_search
+            
+    if idr_currency and isinstance(idr_currency, list) and isinstance(idr_currency[0], dict):
+        idr_id = idr_currency[0]['id']
+        # Aktifkan IDR jika masih inactive
+        if not idr_currency[0].get('active'):
+            api.write('res.currency', [idr_id], {'active': True})
+            print(f"   ✅ Mengaktifkan mata uang IDR (ID: {idr_id}).")
+        
+        company = api.search_read('res.company', [], limit=1)
+        if company and isinstance(company, list) and isinstance(company[0], dict):
+            try:
+                api.write('res.company', [company[0]['id']], {'currency_id': idr_id})
+                print(f"   ✅ Mata uang perusahaan berhasil diubah ke IDR.")
+            except Exception as e:
+                print(f"   ⚠️ Mata uang tidak bisa diubah (Mungkin sudah IDR, atau sudah ada transaksi).")
+                
+        # Update semua Pricelist (Daftar Harga) yang ada ke IDR agar Sales order menggunakan IDR
+        pricelists = api.search_read('product.pricelist', [], fields=['id', 'name'])
+        if pricelists and isinstance(pricelists, list):
+            try:
+                pl_ids = [pl['id'] for pl in pricelists if isinstance(pl, dict) and 'id' in pl]
+                if pl_ids:
+                    api.write('product.pricelist', pl_ids, {'currency_id': idr_id})
+                    print(f"   ✅ Berhasil mengubah {len(pl_ids)} Pricelist ke IDR.")
+            except Exception as e:
+                print(f"   ⚠️ Tidak dapat mengubah mata uang Pricelist (biasanya terkunci jika ada transaksi): {e}")
+    else:
+        print("   ⚠️ Mata uang IDR tidak ditemukan!")
+
     # === 1. Membuat Master Data (Pelanggan, Vendor, Barang) ===
     print("\n1. Membuat Master Data (Pelanggan, Vendor, dan Barang)...")
     
